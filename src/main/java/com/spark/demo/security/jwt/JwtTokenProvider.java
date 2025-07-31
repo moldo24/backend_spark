@@ -60,5 +60,8 @@ public class JwtTokenProvider {
                 .getBody();
         return claims.getSubject(); // subject is email
     }
+    public long getJwtExpirationMs() {
+        return jwtExpirationMs;
+    }
 
 }
