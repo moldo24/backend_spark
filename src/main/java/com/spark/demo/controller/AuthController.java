@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import com.spark.demo.dto.ChangePasswordRequest;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -62,7 +63,13 @@ public class AuthController {
         String email = principal.getName().toLowerCase(Locale.ROOT);
 
         return userRepository.findByEmail(email)
-                .<ResponseEntity<?>>map(ResponseEntity::ok)
+                .<ResponseEntity<?>>map(user -> {
+                    // If there's a locally stored image file, prefer that (override in-memory only)
+                    if (imageService.findLocalProfileImagePath(user.getId()) != null) {
+                        user.setImageUrl(baseUrl.replaceAll("/$", "") + "/auth/me/image");
+                    }
+                    return ResponseEntity.ok(user);
+                })
                 .orElse(ResponseEntity.status(404).body(Map.of("error", "User not found")));
     }
 
@@ -202,6 +209,52 @@ public class AuthController {
         } catch (Exception e) {
             return ResponseEntity.status(500).body(Map.of("error", "Failed to load image"));
         }
+    }
+    @PostMapping("/me/change-password")
+    public ResponseEntity<?> changePassword(
+            Principal principal,
+            @Valid @RequestBody ChangePasswordRequest request,
+            BindingResult br
+    ) {
+        if (principal == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+        }
+
+        if (br.hasErrors()) {
+            String errors = br.getFieldErrors().stream()
+                    .map(f -> f.getField() + ": " + f.getDefaultMessage())
+                    .collect(Collectors.joining("; "));
+            return ResponseEntity.badRequest().body(Map.of("error", errors));
+        }
+
+        String email = principal.getName().toLowerCase(Locale.ROOT);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        // Only allow changing password for LOCAL users
+        if (!AuthProvider.LOCAL.equals(user.getProvider())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Cannot change password for OAuth users"));
+        }
+
+        // Verify current password
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPassword())) {
+            return ResponseEntity.status(401).body(Map.of("error", "Current password is incorrect"));
+        }
+
+        // Prevent using same password
+        if (request.currentPassword().equals(request.newPassword())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "New password must be different from current password"));
+        }
+
+        // Update
+        user.setPassword(passwordEncoder.encode(request.newPassword()));
+        userRepository.save(user);
+
+        // Optionally issue a fresh token so frontend can keep session valid
+        String token = tokenProvider.generateToken(user);
+        long expiresIn = tokenProvider.getJwtExpirationMs();
+
+        return ResponseEntity.ok(new AuthResponse(token, expiresIn));
     }
 
 }

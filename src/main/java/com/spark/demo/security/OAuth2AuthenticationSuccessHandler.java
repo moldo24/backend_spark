@@ -5,16 +5,19 @@ import com.spark.demo.model.Role;
 import com.spark.demo.model.User;
 import com.spark.demo.repository.UserRepository;
 import com.spark.demo.security.jwt.JwtTokenProvider;
+import com.spark.demo.service.UserImageService;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
-import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
 import java.net.URLEncoder;
@@ -24,10 +27,11 @@ import java.util.Optional;
 
 @Component
 @RequiredArgsConstructor
-public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccessHandler {
+public class OAuth2AuthenticationSuccessHandler implements org.springframework.security.web.authentication.AuthenticationSuccessHandler {
 
     private final JwtTokenProvider tokenProvider;
     private final UserRepository userRepository;
+    private final UserImageService imageService;
 
     @Value("${app.oauth2.authorized-redirect-uri:http://localhost:3000/oauth2/redirect}")
     private String redirectUri;
@@ -57,7 +61,6 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         if (email != null && !email.isBlank()) {
             userOptional = userRepository.findByEmail(email.toLowerCase());
         } else {
-            // fallback: try find by providerId (only if email missing)
             String providerIdFallback = extractProviderId(registrationId, attributes);
             if (providerIdFallback == null || providerIdFallback.isBlank()) {
                 System.out.println("Neither email nor providerId available from provider: " + registrationId);
@@ -92,7 +95,11 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
         } else {
             user = userOptional.get();
             user.setName(name != null ? name : user.getName());
-            user.setImageUrl(imageUrl);
+            // Only overwrite image if there's no local uploaded image
+            boolean hasLocal = imageService.findLocalProfileImagePath(user.getId()) != null;
+            if (!hasLocal) {
+                user.setImageUrl(imageUrl);
+            }
             System.out.println("Updating existing OAuth2 user: " + user.getEmail());
         }
         userRepository.save(user);
@@ -105,8 +112,6 @@ public class OAuth2AuthenticationSuccessHandler implements AuthenticationSuccess
 
         response.sendRedirect(targetUrl);
     }
-
-    // provider-specific helpers
 
     private String extractEmail(String provider, Map<String, Object> attrs) {
         if ("google".equalsIgnoreCase(provider) || "github".equalsIgnoreCase(provider)) {

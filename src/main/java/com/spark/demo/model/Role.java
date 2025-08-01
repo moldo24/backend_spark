@@ -2,5 +2,6 @@ package com.spark.demo.model;
 
 public enum Role {
     USER,
-    ADMIN
+    ADMIN,
+    BRAND_SELLER
 }
