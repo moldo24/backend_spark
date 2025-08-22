@@ -9,7 +9,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface BrandRequestRepository extends JpaRepository<BrandRequest, UUID> {
-    Optional<BrandRequest> findFirstBySlugIgnoreCaseAndStatus(String slug, BrandRequestStatus status);
-    Optional<BrandRequest> findFirstByNameIgnoreCaseAndStatus(String name, BrandRequestStatus status);
+
     List<BrandRequest> findByStatus(BrandRequestStatus status);
+
+    long countByApplicantIdAndStatusNot(UUID applicantId, BrandRequestStatus status);
+
+    Optional<BrandRequest> findFirstByApplicantIdOrderByCreatedAtDesc(UUID applicantId);
 }

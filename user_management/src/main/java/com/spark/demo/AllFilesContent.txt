@@ -1,0 +1,1587 @@
+package com.spark.demo;
+
+import com.spark.demo.model.AuthProvider;
+import com.spark.demo.model.Role;
+import com.spark.demo.model.User;
+import com.spark.demo.repository.UserRepository;
+import com.spark.demo.security.jwt.JwtTokenProvider;
+import com.spark.demo.service.UserImageService;
+import com.spark.demo.service.UserSyncNotifier;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.io.IOException;
+import java.nio.file.*;
+import java.util.Comparator;
+import java.util.Optional;
+import java.util.stream.Stream;
+
+@SpringBootApplication
+@RequiredArgsConstructor
+public class DemoApplication {
+
+	@Value("${upload.base-dir:uploads}")
+	private String uploadBaseDir;
+
+	public static void main(String[] args) {
+		SpringApplication.run(DemoApplication.class, args);
+	}
+
+	@Bean
+	public CommandLineRunner initOnStartup(
+			UserRepository userRepository,
+			PasswordEncoder passwordEncoder,
+			UserSyncNotifier userSyncNotifier // << inject notifier
+	) {
+		return args -> {
+			// 1. Clean uploads directory (but keep the directory itself)
+			Path uploads = Paths.get(uploadBaseDir).toAbsolutePath().normalize();
+			if (Files.exists(uploads) && Files.isDirectory(uploads)) {
+				try (Stream<Path> walk = Files.walk(uploads)) {
+					walk.sorted(Comparator.reverseOrder())
+							.filter(p -> !p.equals(uploads)) // don't delete the root folder itself
+							.forEach(p -> {
+								try {
+									Files.deleteIfExists(p);
+								} catch (IOException e) {
+									System.err.println("Failed to delete " + p + ": " + e.getMessage());
+								}
+							});
+				} catch (IOException e) {
+					System.err.println("Failed to clean uploads directory: " + e.getMessage());
+				}
+			}
+			// ensure directory exists
+			Files.createDirectories(uploads);
+			System.out.println("Cleared uploads directory at: " + uploads);
+
+			// 2. Ensure admin user exists and sync it
+			String adminEmail = "admin@admin.com";
+			Optional<User> existing = userRepository.findByEmail(adminEmail);
+			User admin;
+			if (existing.isEmpty()) {
+				admin = new User();
+				admin.setName("admin");
+				admin.setEmail(adminEmail);
+				admin.setProvider(AuthProvider.LOCAL);
+				admin.setPassword(passwordEncoder.encode("admin"));
+				admin.setRole(Role.ADMIN);
+				admin.setEmailVerified(true);
+				userRepository.save(admin);
+				System.out.println("Created default admin user: admin@admin.com / password 'admin'");
+			} else {
+				admin = existing.get();
+				System.out.println("Admin user already exists, skipping creation.");
+			}
+
+			// 3. Sync admin user to electronics store
+			try {
+				userSyncNotifier.notifyUpsert(admin);
+				System.out.println("Synced admin user to electronics store");
+			} catch (Exception e) {
+				System.err.println("Failed to sync admin user on startup: " + e.getMessage());
+				// Depending on your tolerance you could enqueue for retry or let @Retryable retry automatically
+			}
+		};
+	}
+}
+package com.spark.demo.config;
+
+import com.spark.demo.security.CustomOAuth2UserService;
+import com.spark.demo.security.OAuth2AuthenticationSuccessHandler;
+import com.spark.demo.security.jwt.JwtAuthenticationFilter;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
+
+@Configuration
+@RequiredArgsConstructor
+public class SecurityConfig {
+
+    private final CustomOAuth2UserService customOAuth2UserService;
+    private final OAuth2AuthenticationSuccessHandler successHandler;
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+                .csrf(csrf -> csrf.disable())
+                .cors(Customizer.withDefaults())
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/auth/**", "/oauth2/**").permitAll()
+                        .anyRequest().authenticated()
+                )
+                .oauth2Login(oauth2 -> oauth2
+                        .authorizationEndpoint(endpoint -> endpoint.baseUri("/oauth2/authorize"))
+                        .redirectionEndpoint(endpoint -> endpoint.baseUri("/oauth2/callback/*"))
+                        .userInfoEndpoint(userInfo -> userInfo.userService(customOAuth2UserService))
+                        .successHandler(successHandler)
+                )
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+
+        return http.build();
+    }
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(List.of("http://localhost:3000"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setAllowCredentials(true);
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
+}
+package com.spark.demo.config;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.config.annotation.*;
+
+import java.nio.file.Path;
+
+@Configuration
+public class WebConfig implements WebMvcConfigurer {
+
+    @Value("${upload.base-dir}")
+    private String uploadBaseDir;
+
+    @Override
+    public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        Path uploadPath = Path.of(uploadBaseDir).toAbsolutePath().normalize();
+        registry.addResourceHandler("/uploads/**")
+                .addResourceLocations("file:" + uploadPath + "/");
+    }
+}
+package com.spark.demo.controller;
+
+import com.spark.demo.dto.AdminUserResponse;
+import com.spark.demo.dto.CreateUserRequest;
+import com.spark.demo.dto.UpdateUserRequest;
+import com.spark.demo.service.AdminUserService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.UUID;
+
+@RestController
+@RequestMapping("/admin/users")
+@RequiredArgsConstructor
+@PreAuthorize("hasRole('ADMIN')")
+public class AdminController {
+
+    private final AdminUserService userService;
+
+    @GetMapping
+    public List<AdminUserResponse> listUsers() {
+        return userService.listAll();
+    }
+
+    @GetMapping("/{id}")
+    public AdminUserResponse getUser(@PathVariable UUID id) {
+        return userService.get(id);
+    }
+
+    @PostMapping
+    public ResponseEntity<AdminUserResponse> createUser(@Valid @RequestBody CreateUserRequest req) {
+        AdminUserResponse created = userService.create(req);
+        return ResponseEntity.status(201).body(created);
+    }
+
+    @PutMapping("/{id}")
+    public AdminUserResponse updateUser(@PathVariable UUID id, @Valid @RequestBody UpdateUserRequest req) {
+        return userService.update(id, req);
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> deleteUser(@PathVariable UUID id) {
+        userService.delete(id);
+        return ResponseEntity.noContent().build();
+    }
+}
+package com.spark.demo.controller;
+
+import com.spark.demo.dto.AuthResponse;
+import com.spark.demo.dto.LoginRequest;
+import com.spark.demo.dto.RegisterRequest;
+import com.spark.demo.model.AuthProvider;
+import com.spark.demo.model.User;
+import com.spark.demo.model.Role;
+import com.spark.demo.repository.UserRepository;
+import com.spark.demo.security.jwt.JwtTokenProvider;
+import com.spark.demo.service.UserImageService;
+import com.spark.demo.service.UserSyncNotifier;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.validation.BindingResult;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
+import com.spark.demo.dto.ChangePasswordRequest;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.Principal;
+import java.util.Locale;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+@CrossOrigin(origins = "http://localhost:3000")
+@RestController
+@RequestMapping("/auth")
+@RequiredArgsConstructor
+public class AuthController {
+
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final AuthenticationManager authenticationManager;
+    private final JwtTokenProvider tokenProvider;
+    private final UserImageService imageService;
+    private final UserSyncNotifier userSyncNotifier ;
+    @Value("${upload.base-dir}")
+    private String uploadBaseDir;
+
+    @Value("${baseUrl:http://localhost:8080}")
+    private String baseUrl;
+
+    @GetMapping("/me")
+    public ResponseEntity<?> getCurrentUser(Principal principal) {
+        if (principal == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+        }
+
+        String email = principal.getName().toLowerCase(Locale.ROOT);
+
+        return userRepository.findByEmail(email)
+                .<ResponseEntity<?>>map(user -> {
+                    // If there's a locally stored image file, prefer that (override in-memory only)
+                    if (imageService.findLocalProfileImagePath(user.getId()) != null) {
+                        user.setImageUrl(baseUrl.replaceAll("/$", "") + "/auth/me/image");
+                    }
+                    return ResponseEntity.ok(user);
+                })
+                .orElse(ResponseEntity.status(404).body(Map.of("error", "User not found")));
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<?> register(
+            @Valid @RequestBody RegisterRequest request,
+            BindingResult br
+    ) {
+        if (br.hasErrors()) {
+            String errors = br.getFieldErrors().stream()
+                    .map(f -> f.getField() + ": " + f.getDefaultMessage())
+                    .collect(Collectors.joining("; "));
+            return ResponseEntity.badRequest().body(Map.of("error", errors));
+        }
+
+        String normalizedEmail = request.email().toLowerCase(Locale.ROOT);
+        if (userRepository.findByEmail(normalizedEmail).isPresent()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Email already in use"));
+        }
+
+        User user = new User();
+        user.setName(request.name());
+        user.setProvider(AuthProvider.LOCAL);
+        user.setEmail(normalizedEmail);
+        user.setEmailVerified(true);
+        user.setPassword(passwordEncoder.encode(request.password()));
+        user.setRole(Role.USER);
+        user.setImageUrl(baseUrl.replaceAll("/$", "") + "/auth/me/image");
+        userRepository.save(user);
+        userSyncNotifier.notifyUpsert(user);
+
+        String token = tokenProvider.generateToken(user);
+        long expiresIn = tokenProvider.getJwtExpirationMs();
+
+        return ResponseEntity.ok(new AuthResponse(token, expiresIn));
+    }
+
+
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@RequestBody LoginRequest request) {
+        try {
+            Authentication authentication = authenticationManager.authenticate(
+                    new UsernamePasswordAuthenticationToken(request.email(), request.password())
+            );
+
+            User user = userRepository.findByEmail(request.email().toLowerCase(Locale.ROOT))
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials"));
+
+            String token = tokenProvider.generateToken(user);
+            long expiresIn = tokenProvider.getJwtExpirationMs();
+
+            return ResponseEntity.ok(new AuthResponse(token, expiresIn));
+        } catch (AuthenticationException ex) {
+            return ResponseEntity.status(401).body(Map.of("error", "Invalid credentials"));
+        }
+    }
+
+    @PostMapping("/me/image")
+    public ResponseEntity<?> uploadProfileImage(Principal principal,
+                                                @RequestParam("image") MultipartFile image) {
+        if (principal == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+        }
+
+        String email = principal.getName().toLowerCase(Locale.ROOT);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        try {
+            imageService.storeProfileImage(image, user.getId());
+            // ensure sentinel remains for local users
+            user.setImageUrl(baseUrl.replaceAll("/$", "") + "/auth/me/image");
+            userRepository.save(user);
+            return ResponseEntity.ok(Map.of("imageUrl", user.getImageUrl()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Failed to store image"));
+        }
+    }
+    private ResponseEntity<?> serveDefaultAvatar() {
+        try {
+            // Place default-avatar.png under src/main/resources/static/images/default-avatar.png
+            Path p = Paths.get("src/main/resources/static/images/default-avatar.png").toAbsolutePath().normalize();
+            byte[] bytes = Files.readAllBytes(p);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.IMAGE_PNG)
+                    .body(bytes);
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "No default avatar available"));
+        }
+    }
+
+    @GetMapping("/me/image")
+    public ResponseEntity<?> getProfileImage(Principal principal) {
+        if (principal == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+        }
+
+        String email = principal.getName().toLowerCase(Locale.ROOT);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        // 1. Try locally stored image first
+        try {
+            Path localImage = imageService.findLocalProfileImagePath(user.getId());
+            if (localImage != null) {
+                if (Files.exists(localImage) && Files.isReadable(localImage)) {
+                    byte[] bytes = Files.readAllBytes(localImage);
+                    String probeType = Files.probeContentType(localImage);
+                    MediaType mediaType = (probeType != null) ? MediaType.parseMediaType(probeType)
+                            : MediaType.APPLICATION_OCTET_STREAM;
+                    return ResponseEntity.ok().contentType(mediaType).body(bytes);
+                }
+            }
+
+            // 2. Remote image (Google / GitHub)
+            String imageUrl = user.getImageUrl();
+            String sentinel = baseUrl.replaceAll("/$", "") + "/auth/me/image";
+            if (imageUrl != null && imageUrl.startsWith("http") && !imageUrl.equalsIgnoreCase(sentinel)) {
+                RestTemplate rest = new RestTemplate();
+                ResponseEntity<byte[]> resp = rest.getForEntity(imageUrl, byte[].class);
+                if (resp.getStatusCode().is2xxSuccessful() && resp.getBody() != null) {
+                    String contentType = resp.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE);
+                    MediaType mediaType = (contentType != null) ? MediaType.parseMediaType(contentType)
+                            : MediaType.APPLICATION_OCTET_STREAM;
+                    return ResponseEntity.ok()
+                            .contentType(mediaType)
+                            .body(resp.getBody());
+                } else {
+                    return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                            .body(Map.of("error", "Failed to fetch remote image"));
+                }
+            }
+
+            // 3. Fallback default avatar
+            return serveDefaultAvatar();
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", "Failed to load image"));
+        }
+    }
+    @PostMapping("/me/change-password")
+    public ResponseEntity<?> changePassword(
+            Principal principal,
+            @Valid @RequestBody ChangePasswordRequest request,
+            BindingResult br
+    ) {
+        if (principal == null) {
+            return ResponseEntity.status(401).body(Map.of("error", "Unauthorized"));
+        }
+
+        if (br.hasErrors()) {
+            String errors = br.getFieldErrors().stream()
+                    .map(f -> f.getField() + ": " + f.getDefaultMessage())
+                    .collect(Collectors.joining("; "));
+            return ResponseEntity.badRequest().body(Map.of("error", errors));
+        }
+
+        String email = principal.getName().toLowerCase(Locale.ROOT);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        // Only allow changing password for LOCAL users
+        if (!AuthProvider.LOCAL.equals(user.getProvider())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Cannot change password for OAuth users"));
+        }
+
+        // Verify current password
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPassword())) {
+            return ResponseEntity.status(401).body(Map.of("error", "Current password is incorrect"));
+        }
+
+        // Prevent using same password
+        if (request.currentPassword().equals(request.newPassword())) {
+            return ResponseEntity.badRequest().body(Map.of("error", "New password must be different from current password"));
+        }
+
+        // Update
+        user.setPassword(passwordEncoder.encode(request.newPassword()));
+        userRepository.save(user);
+
+        // Optionally issue a fresh token so frontend can keep session valid
+        String token = tokenProvider.generateToken(user);
+        long expiresIn = tokenProvider.getJwtExpirationMs();
+
+        return ResponseEntity.ok(new AuthResponse(token, expiresIn));
+    }
+
+}
+// src/main/java/com/spark/demo/dto/AdminUserResponse.java
+package com.spark.demo.dto;
+
+import com.spark.demo.model.AuthProvider;
+import com.spark.demo.model.Role;
+import lombok.*;
+import java.util.UUID;
+
+import java.time.LocalDateTime;
+
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class AdminUserResponse {
+    private UUID id;
+    private AuthProvider provider;
+    private String providerId;
+    private String name;
+    private String email;
+    private String imageUrl;
+    private boolean emailVerified;
+    private Role role;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+}
+package com.spark.demo.dto;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+public class AuthResponse {
+    @Setter
+    private String token;
+
+    @JsonProperty("token_type")
+    private final String tokenType = "Bearer";
+
+    @Setter
+    @Getter
+    @JsonProperty("expires_in_ms")
+    private long expiresInMillis;
+
+    public AuthResponse(String token, long expiresInMillis) {
+        this.token = token;
+        this.expiresInMillis = expiresInMillis;
+    }
+
+}
+// src/main/java/com/spark/demo/dto/ChangePasswordRequest.java
+package com.spark.demo.dto;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+public record ChangePasswordRequest(
+        @NotBlank(message = "Current password is required") String currentPassword,
+        @NotBlank(message = "New password is required") @Size(min = 8, message = "New password must be at least 8 characters") String newPassword
+) {}
+// src/main/java/com/spark/demo/dto/CreateUserRequest.java
+package com.spark.demo.dto;
+
+import com.spark.demo.model.AuthProvider;
+import com.spark.demo.model.Role;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import lombok.*;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class CreateUserRequest {
+    @NotBlank
+    private String name;
+
+    @Email
+    @NotBlank
+    private String email;
+
+    /**
+     * Only required/used when provider == LOCAL.
+     * If omitted for LOCAL, registration will fail.
+     */
+    private String password;
+
+    @NotNull
+    private Role role;
+
+    private boolean emailVerified = false;
+
+    @NotNull
+    private AuthProvider provider;
+
+    /**
+     * Required if provider is OAuth (e.g., GOOGLE or GITHUB)
+     */
+    private String providerId;
+}
+package com.spark.demo.dto;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+
+public record LoginRequest(
+        @Email(message = "Invalid email format")
+        @NotBlank(message = "Email is required")
+        String email,
+
+        @NotBlank(message = "Password is required")
+        String password
+) {}
+package com.spark.demo.dto;
+
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+public record RegisterRequest(
+        @NotBlank(message = "Name is required")
+        @Size(min = 2, message = "Name must be at least 2 characters")
+        String name,
+        @Email(message = "Invalid email format")
+        @NotBlank(message = "Email is required")
+        String email,
+
+        @NotBlank(message = "Password is required")
+        @Size(min = 8, message = "Password must be at least 8 characters")
+        String password
+) {}
+// src/main/java/com/spark/demo/dto/UpdateUserRequest.java
+package com.spark.demo.dto;
+
+import com.spark.demo.model.Role;
+import jakarta.validation.constraints.Email;
+import lombok.*;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class UpdateUserRequest {
+    private String name;
+
+    @Email
+    private String email;
+
+    /**
+     * If present and user.provider == LOCAL, this will reset the password.
+     */
+    private String password;
+
+    private Role role;
+
+    private Boolean emailVerified;
+}
+package com.spark.demo.dto;
+
+import java.util.UUID;
+
+public record UserSyncDto(
+        UUID id,
+        String email,
+        String name,
+        String role,
+        int tokenVersion,
+        boolean deleted
+) { }
+package com.spark.demo.model;
+
+public enum AuthProvider {
+    LOCAL,
+    GOOGLE,
+    GITHUB
+}
+package com.spark.demo.model;
+
+public enum Role {
+    USER,
+    ADMIN,
+    BRAND_SELLER
+}
+package com.spark.demo.model;
+
+import jakarta.persistence.*;
+import lombok.*;
+import org.hibernate.annotations.UuidGenerator;
+
+import java.time.LocalDateTime;
+import java.util.UUID;
+
+@Entity
+@Table(name = "users")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class User {
+
+    @Id
+    @UuidGenerator // modern Hibernate 6+ UUID generator (defaults to RANDOM/v4)
+    @Column(columnDefinition = "uuid", updatable = false, nullable = false)
+    private UUID id;
+
+    @Enumerated(EnumType.STRING)
+    private AuthProvider provider; // GOOGLE, FACEBOOK, LOCAL
+
+    private String providerId; // Only for OAuth2
+
+    @Column(nullable = false)
+    private String name;
+
+    @Column(nullable = false, unique = true)
+    private String email;
+
+    private String password; // Only for LOCAL registration
+
+    private String imageUrl;
+
+    private boolean emailVerified = false;
+
+    @Column(nullable = false)
+    @Enumerated(EnumType.STRING)
+    private Role role = Role.USER;
+
+    private LocalDateTime createdAt;
+
+    private LocalDateTime updatedAt;
+
+    @PrePersist
+    protected void onCreate() {
+        createdAt = updatedAt = LocalDateTime.now();
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+
+    @Column(nullable = false)
+    private int tokenVersion = 0;
+
+    public void bumpTokenVersion() {
+        this.tokenVersion++;
+    }
+
+}
+package com.spark.demo.repository;
+
+import com.spark.demo.model.User;
+import com.spark.demo.model.AuthProvider;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+import java.util.UUID;
+
+public interface UserRepository extends JpaRepository<User, UUID> {
+    Optional<User> findByEmail(String email);
+    Optional<User> findByProviderAndProviderId(AuthProvider provider, String providerId);
+}
+package com.spark.demo.security;
+
+import com.spark.demo.model.AuthProvider;
+import com.spark.demo.model.Role;
+import com.spark.demo.model.User;
+import com.spark.demo.repository.UserRepository;
+import com.spark.demo.service.UserImageService;
+import com.spark.demo.service.UserSyncNotifier;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.*;
+import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
+import org.springframework.security.oauth2.client.userinfo.OAuth2UserRequest;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestTemplate;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+
+@Service
+@RequiredArgsConstructor
+public class CustomOAuth2UserService extends DefaultOAuth2UserService {
+
+    private static final Logger log = LoggerFactory.getLogger(CustomOAuth2UserService.class);
+
+    private final UserRepository userRepository;
+    private final UserImageService imageService;
+    private final UserSyncNotifier userSyncNotifier;
+    @Override
+    public OAuth2User loadUser(OAuth2UserRequest request) throws OAuth2AuthenticationException {
+        OAuth2User oAuth2User = super.loadUser(request);
+        String registrationId = request.getClientRegistration().getRegistrationId().toLowerCase(); // "google" or "github"
+        Map<String, Object> attributes = oAuth2User.getAttributes();
+
+        String email = extractEmail(registrationId, attributes, request);
+        if (email == null || email.isBlank()) {
+            throw new OAuth2AuthenticationException(new org.springframework.security.oauth2.core.OAuth2Error("email_not_found"),
+                    "Email not provided by " + registrationId);
+        }
+        email = email.toLowerCase(Locale.ROOT).trim();
+
+        String name = extractName(registrationId, attributes);
+        if (name == null || name.isBlank()) {
+            name = email;
+        }
+
+        String imageUrl = extractImage(registrationId, attributes);
+        String providerId = extractProviderId(registrationId, attributes);
+
+        AuthProvider provider = AuthProvider.valueOf(registrationId.toUpperCase());
+
+        Optional<User> existingOpt = userRepository.findByEmail(email);
+        User user;
+        if (existingOpt.isPresent()) {
+            user = existingOpt.get();
+            if (!user.getProvider().equals(provider)) {
+                log.info("User with email {} exists with provider {} but is logging in via {}. Keeping original provider.",
+                        email, user.getProvider(), provider);
+            }
+            // always update mutable fields
+            user.setName(name);
+
+            boolean hasLocalImage = imageService.findLocalProfileImagePath(user.getId()) != null;
+            if (!hasLocalImage && imageUrl != null && !imageUrl.isBlank()) {
+                // Only overwrite avatar from provider if no local uploaded image exists
+                user.setImageUrl(imageUrl);
+            }
+        } else {
+            user = registerNewUser(provider, providerId, name, email, imageUrl);
+            log.info("Registered new OAuth2 user: {} via {}", email, provider);
+        }
+
+        userRepository.save(user);
+        userSyncNotifier.notifyUpsert(user);
+        return oAuth2User;
+    }
+
+    private User registerNewUser(AuthProvider provider, String providerId, String name, String email, String imageUrl) {
+        return userRepository.save(User.builder()
+                .provider(provider)
+                .providerId(providerId)
+                .name(name)
+                .email(email)
+                .imageUrl(imageUrl)
+                .emailVerified(true)
+                .role(Role.USER)
+                .build());
+    }
+
+    private String extractEmail(String provider, Map<String, Object> attrs, OAuth2UserRequest request) {
+        if ("google".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("email");
+        } else if ("github".equalsIgnoreCase(provider)) {
+            String email = (String) attrs.get("email");
+            if (email != null && !email.isBlank()) {
+                return email;
+            }
+            return fetchGithubPrimaryEmail(request);
+        }
+        return null;
+    }
+
+    private String extractName(String provider, Map<String, Object> attrs) {
+        if ("google".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("name");
+        } else if ("github".equalsIgnoreCase(provider)) {
+            Object name = attrs.get("name");
+            if (name instanceof String && !((String) name).isBlank()) {
+                return (String) name;
+            }
+            return (String) attrs.get("login");
+        }
+        return null;
+    }
+
+    private String extractImage(String provider, Map<String, Object> attrs) {
+        if ("google".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("picture");
+        } else if ("github".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("avatar_url");
+        }
+        return null;
+    }
+
+    private String extractProviderId(String provider, Map<String, Object> attrs) {
+        if ("google".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("sub");
+        } else if ("github".equalsIgnoreCase(provider)) {
+            return String.valueOf(attrs.get("id"));
+        }
+        return null;
+    }
+
+    private String fetchGithubPrimaryEmail(OAuth2UserRequest request) {
+        String token = request.getAccessToken().getTokenValue();
+        RestTemplate rest = new RestTemplate();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", "token " + token);
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        HttpEntity<Void> entity = new HttpEntity<>(headers);
+
+        try {
+            ResponseEntity<List<Map<String, Object>>> resp = rest.exchange(
+                    "https://api.github.com/user/emails",
+                    HttpMethod.GET,
+                    entity,
+                    new ParameterizedTypeReference<>() {}
+            );
+
+            List<Map<String, Object>> emails = resp.getBody();
+            if (emails == null) return null;
+
+            for (Map<String, Object> e : emails) {
+                Boolean primary = (Boolean) e.get("primary");
+                Boolean verified = (Boolean) e.get("verified");
+                String email = (String) e.get("email");
+                if (Boolean.TRUE.equals(primary) && Boolean.TRUE.equals(verified) && email != null) {
+                    return email;
+                }
+            }
+            for (Map<String, Object> e : emails) {
+                Boolean verified = (Boolean) e.get("verified");
+                String email = (String) e.get("email");
+                if (Boolean.TRUE.equals(verified) && email != null) {
+                    return email;
+                }
+            }
+        } catch (RestClientException ex) {
+            log.warn("Failed to fetch GitHub emails: {}", ex.getMessage());
+        }
+        return null;
+    }
+}
+package com.spark.demo.security;
+
+import com.spark.demo.model.User;
+import com.spark.demo.repository.UserRepository;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class CustomUserDetailsService implements UserDetailsService {
+    private final UserRepository repo;
+
+    public CustomUserDetailsService(UserRepository repo) {
+        this.repo = repo;
+    }
+
+    @Override
+    public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+        User user = repo.findByEmail(email)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found with email: " + email));
+
+        List<GrantedAuthority> authorities = List.of(
+                new SimpleGrantedAuthority("ROLE_" + user.getRole().name())
+        );
+
+        return org.springframework.security.core.userdetails.User.builder()
+                .username(user.getEmail())
+                .password(user.getPassword())
+                .authorities(authorities)
+                .accountExpired(false)
+                .accountLocked(false)
+                .credentialsExpired(false)
+                .disabled(false) // or !user.isEnabled() if you have an enabled flag
+                .build();
+    }
+
+}
+package com.spark.demo.security;
+
+import com.spark.demo.model.AuthProvider;
+import com.spark.demo.model.Role;
+import com.spark.demo.model.User;
+import com.spark.demo.repository.UserRepository;
+import com.spark.demo.security.jwt.JwtTokenProvider;
+import com.spark.demo.service.UserImageService;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
+import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.Optional;
+
+@Component
+@RequiredArgsConstructor
+public class OAuth2AuthenticationSuccessHandler implements org.springframework.security.web.authentication.AuthenticationSuccessHandler {
+
+    private final JwtTokenProvider tokenProvider;
+    private final UserRepository userRepository;
+    private final UserImageService imageService;
+
+    @Value("${app.oauth2.authorized-redirect-uri:http://localhost:3000/oauth2/redirect}")
+    private String redirectUri;
+
+    @Override
+    public void onAuthenticationSuccess(HttpServletRequest request,
+                                        HttpServletResponse response,
+                                        Authentication authentication) throws IOException, ServletException {
+        System.out.println("OAuth2 login successful");
+
+        if (!(authentication instanceof OAuth2AuthenticationToken oauthToken)) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Unsupported authentication type");
+            return;
+        }
+
+        String registrationId = oauthToken.getAuthorizedClientRegistrationId(); // "google" or "github"
+        AuthProvider provider = AuthProvider.valueOf(registrationId.toUpperCase());
+
+        OAuth2User oauthUser = oauthToken.getPrincipal();
+        Map<String, Object> attributes = oauthUser.getAttributes();
+
+        System.out.println("OAuth2 attributes received: " + attributes);
+
+        String email = extractEmail(registrationId, attributes);
+        Optional<User> userOptional;
+
+        if (email != null && !email.isBlank()) {
+            userOptional = userRepository.findByEmail(email.toLowerCase());
+        } else {
+            String providerIdFallback = extractProviderId(registrationId, attributes);
+            if (providerIdFallback == null || providerIdFallback.isBlank()) {
+                System.out.println("Neither email nor providerId available from provider: " + registrationId);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Email not available from provider");
+                return;
+            }
+            userOptional = userRepository.findByProviderAndProviderId(provider, providerIdFallback);
+        }
+
+        User user;
+        String normalizedEmail = email != null ? email.toLowerCase() : null;
+        String name = extractName(registrationId, attributes);
+        String imageUrl = extractImage(registrationId, attributes);
+        String providerId = extractProviderId(registrationId, attributes);
+
+        if (userOptional.isEmpty()) {
+            if (normalizedEmail == null) {
+                System.out.println("Cannot register user: no email from provider " + registrationId);
+                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Email not provided, cannot register user");
+                return;
+            }
+            user = User.builder()
+                    .provider(provider)
+                    .providerId(providerId)
+                    .name(name != null ? name : normalizedEmail)
+                    .email(normalizedEmail)
+                    .imageUrl(imageUrl)
+                    .emailVerified(true)
+                    .role(Role.USER)
+                    .build();
+            System.out.println("Registering new OAuth2 user: " + normalizedEmail);
+        } else {
+            user = userOptional.get();
+            user.setName(name != null ? name : user.getName());
+            // Only overwrite image if there's no local uploaded image
+            boolean hasLocal = imageService.findLocalProfileImagePath(user.getId()) != null;
+            if (!hasLocal) {
+                user.setImageUrl(imageUrl);
+            }
+            System.out.println("Updating existing OAuth2 user: " + user.getEmail());
+        }
+        userRepository.save(user);
+
+        String token = tokenProvider.generateToken(user);
+        System.out.println("Generated JWT token for user: " + (user.getEmail() != null ? user.getEmail() : "[unknown]"));
+
+        String targetUrl = redirectUri + "?token=" + URLEncoder.encode(token, StandardCharsets.UTF_8);
+        System.out.println("Redirecting to: " + targetUrl);
+
+        response.sendRedirect(targetUrl);
+    }
+
+    private String extractEmail(String provider, Map<String, Object> attrs) {
+        if ("google".equalsIgnoreCase(provider) || "github".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("email");
+        }
+        return null;
+    }
+
+    private String extractName(String provider, Map<String, Object> attrs) {
+        if ("google".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("name");
+        } else if ("github".equalsIgnoreCase(provider)) {
+            Object name = attrs.get("name");
+            if (name instanceof String s && !s.isBlank()) {
+                return s;
+            }
+            return (String) attrs.get("login");
+        }
+        return null;
+    }
+
+    private String extractImage(String provider, Map<String, Object> attrs) {
+        if ("google".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("picture");
+        } else if ("github".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("avatar_url");
+        }
+        return null;
+    }
+
+    private String extractProviderId(String provider, Map<String, Object> attrs) {
+        if ("google".equalsIgnoreCase(provider)) {
+            return (String) attrs.get("sub");
+        } else if ("github".equalsIgnoreCase(provider)) {
+            return String.valueOf(attrs.get("id"));
+        }
+        return null;
+    }
+}
+package com.spark.demo.security.jwt;
+
+import com.spark.demo.model.User;
+import com.spark.demo.repository.UserRepository;
+import io.jsonwebtoken.Claims;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.util.List;
+
+@Component
+@RequiredArgsConstructor
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private final JwtTokenProvider tokenProvider;
+    private final UserRepository userRepository;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain)
+            throws ServletException, IOException {
+
+        String authHeader = request.getHeader("Authorization");
+
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        String token = authHeader.substring(7);
+        if (!tokenProvider.validateToken(token)) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        String email = tokenProvider.getEmailFromToken(token);
+
+        User user = userRepository.findByEmail(email)
+                .orElse(null);
+
+        if (user != null) {
+            List<GrantedAuthority> authorities = List.of(
+                    new SimpleGrantedAuthority("ROLE_" + user.getRole().name())
+            );
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(user.getEmail(), null, authorities);
+            authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+        }
+
+        filterChain.doFilter(request, response);
+    }
+}
+package com.spark.demo.security.jwt;
+
+import com.spark.demo.model.User;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+import java.security.Key;
+import java.util.Date;
+
+@Component
+public class JwtTokenProvider {
+
+    @Value("${app.auth.token-secret}")
+    private String jwtSecret;
+
+    @Value("${app.auth.token-expiration-ms}")
+    private Long jwtExpirationMs;
+
+    public String generateToken(User user) {
+        Date now = new Date();
+        Date expiry = new Date(now.getTime() + jwtExpirationMs);
+
+        return Jwts.builder()
+                .setSubject(user.getEmail())
+                .claim("id", user.getId().toString())
+                .claim("name", user.getName())
+                .claim("provider", user.getProvider().name())
+                .setIssuedAt(now)
+                .setExpiration(expiry)
+                .signWith(getSignKey(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    private Key getSignKey() {
+        byte[] keyBytes = Decoders.BASE64.decode(jwtSecret);
+        return Keys.hmacShaKeyFor(keyBytes);
+    }
+    public boolean validateToken(String token) {
+        try {
+            Jwts.parserBuilder()
+                    .setSigningKey(getSignKey())
+                    .build()
+                    .parseClaimsJws(token);
+            return true;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    public String getEmailFromToken(String token) {
+        Claims claims = Jwts.parserBuilder()
+                .setSigningKey(getSignKey())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+        return claims.getSubject(); // subject is email
+    }
+    public long getJwtExpirationMs() {
+        return jwtExpirationMs;
+    }
+
+}
+package com.spark.demo.service;
+
+import com.spark.demo.dto.AdminUserResponse;
+import com.spark.demo.dto.CreateUserRequest;
+import com.spark.demo.dto.UpdateUserRequest;
+import com.spark.demo.model.AuthProvider;
+import com.spark.demo.model.User;
+import com.spark.demo.repository.UserRepository;
+import jakarta.transaction.Transactional;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
+
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+public class AdminUserService {
+
+    private static final Logger log = LoggerFactory.getLogger(AdminUserService.class);
+
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final UserSyncNotifier userSyncNotifier; // <--- injected
+
+    private AdminUserResponse toResponse(User u) {
+        return AdminUserResponse.builder()
+                .id(u.getId())
+                .provider(u.getProvider())
+                .providerId(u.getProviderId())
+                .name(u.getName())
+                .email(u.getEmail())
+                .imageUrl(u.getImageUrl())
+                .emailVerified(u.isEmailVerified())
+                .role(u.getRole())
+                .createdAt(u.getCreatedAt())
+                .updatedAt(u.getUpdatedAt())
+                .build();
+    }
+
+    public List<AdminUserResponse> listAll() {
+        return userRepository.findAll().stream()
+                .map(this::toResponse)
+                .collect(Collectors.toList());
+    }
+
+    public AdminUserResponse get(UUID id) {
+        User u = userRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        return toResponse(u);
+    }
+
+    @Transactional
+    public AdminUserResponse create(CreateUserRequest req) {
+        String emailNorm = req.getEmail().toLowerCase(Locale.ROOT).trim();
+        if (userRepository.findByEmail(emailNorm).isPresent()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already in use");
+        }
+
+        if (req.getProvider() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Provider is required");
+        }
+
+        if (req.getProvider() == AuthProvider.LOCAL) {
+            if (req.getPassword() == null || req.getPassword().length() < 8) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password required and must be >=8 chars for LOCAL user");
+            }
+        } else {
+            if (req.getProviderId() == null || req.getProviderId().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "providerId required for OAuth user");
+            }
+        }
+
+        User.UserBuilder builder = User.builder()
+                .name(req.getName())
+                .email(emailNorm)
+                .provider(req.getProvider())
+                .providerId(req.getProviderId())
+                .role(req.getRole())
+                .emailVerified(req.isEmailVerified());
+
+        if (req.getProvider() == AuthProvider.LOCAL) {
+            builder.password(passwordEncoder.encode(req.getPassword()));
+        }
+
+        User user = builder.build();
+        userRepository.save(user);
+
+        // sync to store (non-blocking in sense of not failing flow if sync eventually fails)
+        try {
+            userSyncNotifier.notifyUpsert(user);
+        } catch (Exception e) {
+            log.warn("Failed to notify store about created user {}: {}", user.getId(), e.getMessage());
+        }
+
+        return toResponse(user);
+    }
+
+    @Transactional
+    public AdminUserResponse update(UUID id, UpdateUserRequest req) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        if (req.getEmail() != null && !req.getEmail().isBlank()) {
+            String emailNorm = req.getEmail().toLowerCase(Locale.ROOT).trim();
+            if (!emailNorm.equals(user.getEmail()) && userRepository.findByEmail(emailNorm).isPresent()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already in use");
+            }
+            user.setEmail(emailNorm);
+        }
+
+        if (req.getName() != null && !req.getName().isBlank()) {
+            user.setName(req.getName());
+        }
+
+        if (req.getRole() != null) {
+            user.setRole(req.getRole());
+        }
+
+        if (req.getEmailVerified() != null) {
+            user.setEmailVerified(req.getEmailVerified());
+        }
+
+        if (req.getPassword() != null && !req.getPassword().isBlank()) {
+            if (user.getProvider() != AuthProvider.LOCAL) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cannot set password for non-LOCAL user");
+            }
+            if (req.getPassword().length() < 8) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at least 8 characters");
+            }
+            user.setPassword(passwordEncoder.encode(req.getPassword()));
+        }
+
+        userRepository.save(user);
+
+        try {
+            userSyncNotifier.notifyUpsert(user);
+        } catch (Exception e) {
+            log.warn("Failed to notify store about updated user {}: {}", user.getId(), e.getMessage());
+        }
+
+        return toResponse(user);
+    }
+
+    public void delete(UUID id) {
+        if (!userRepository.existsById(id)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found");
+        }
+
+        userRepository.deleteById(id);
+
+        try {
+            userSyncNotifier.notifyDelete(id);
+        } catch (Exception e) {
+            log.warn("Failed to notify store about deleted user {}: {}", id, e.getMessage());
+        }
+    }
+}
+// src/main/java/com/spark/demo/service/UserImageService.java
+package com.spark.demo.service;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.InputStream;
+import java.nio.file.*;
+import java.util.Objects;
+import java.util.UUID;
+
+@Service
+public class UserImageService {
+
+    @Value("${upload.base-dir}")
+    private String baseDir;
+
+    private static final long MAX_SIZE = 2 * 1024 * 1024; // 2MB
+
+    public void storeProfileImage(MultipartFile file, UUID userId) throws Exception {
+        String contentType = file.getContentType();
+        if (contentType == null) {
+            throw new IllegalArgumentException("Missing content type");
+        }
+
+        boolean isPng = contentType.equalsIgnoreCase("image/png");
+        boolean isJpeg = contentType.equalsIgnoreCase("image/jpeg") || contentType.equalsIgnoreCase("image/jpg");
+        if (!isPng && !isJpeg) {
+            throw new IllegalArgumentException("Only PNG/JPEG allowed");
+        }
+        if (file.getSize() > MAX_SIZE) {
+            throw new IllegalArgumentException("File too large (max 2MB)");
+        }
+
+        String ext = isPng ? ".png" : ".jpg";
+
+        Path dir = Paths.get(Objects.requireNonNull(baseDir)).toAbsolutePath().normalize();
+        Files.createDirectories(dir);
+
+        // Clean up other format if replacing
+        Path png = dir.resolve("user-" + userId + ".png");
+        Path jpg = dir.resolve("user-" + userId + ".jpg");
+        if (isPng && Files.exists(jpg)) {
+            Files.deleteIfExists(jpg);
+        }
+        if (!isPng && Files.exists(png)) {
+            Files.deleteIfExists(png);
+        }
+
+        Path target = dir.resolve("user-" + userId + ext);
+        try (InputStream in = file.getInputStream()) {
+            Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /**
+     * Helper for controller to find the stored local image path if any.
+     * Returns null if none exists.
+     */
+    public Path findLocalProfileImagePath(UUID userId) {
+        Path dir = Paths.get(Objects.requireNonNull(baseDir)).toAbsolutePath().normalize();
+        Path png = dir.resolve("user-" + userId + ".png");
+        if (Files.exists(png)) return png;
+        Path jpg = dir.resolve("user-" + userId + ".jpg");
+        if (Files.exists(jpg)) return jpg;
+        return null;
+    }
+}
+package com.spark.demo.service;
+
+import com.spark.demo.dto.UserSyncDto;
+import com.spark.demo.model.User;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Recover;
+import org.springframework.retry.annotation.Retryable;
+import org.springframework.stereotype.Component;
+import org.springframework.http.*;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.UUID;
+
+@Component
+@RequiredArgsConstructor
+public class UserSyncNotifier {
+
+    private static final Logger log = LoggerFactory.getLogger(UserSyncNotifier.class);
+
+    private final RestTemplate restTemplate = new RestTemplate();
+
+    @Value("${sync.store-base-url}")
+    private String storeBaseUrl;
+
+    @Value("${sync.shared-secret}")
+    private String sharedSecret;
+
+    @Retryable(value = RestClientException.class, backoff = @Backoff(delay = 2000, multiplier = 2, maxDelay = 20000))
+    public void notifyUpsert(User user) {
+        UserSyncDto dto = new UserSyncDto(
+                user.getId(),
+                user.getEmail(),
+                user.getName(),
+                user.getRole().name(),
+                user.getTokenVersion(),
+                false
+        );
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(sharedSecret);
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<UserSyncDto> req = new HttpEntity<>(dto, headers);
+
+        String url = storeBaseUrl + "/internal/sync/users";
+        restTemplate.postForEntity(url, req, Void.class);
+        log.debug("Synced user upsert to store service: {}", user.getId());
+    }
+
+    @Recover
+    public void recover(RestClientException ex, User user) {
+        log.error("Failed to sync upsert for user {} after retries", user.getId(), ex);
+        // Optionally enqueue to a durable retry queue or alert.
+    }
+
+    @Retryable(value = RestClientException.class, backoff = @Backoff(delay = 2000, multiplier = 2, maxDelay = 20000))
+    public void notifyDelete(UUID userId) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(sharedSecret);
+        HttpEntity<Void> req = new HttpEntity<>(headers);
+        String url = storeBaseUrl + "/internal/sync/users/" + userId;
+        restTemplate.exchange(url, HttpMethod.DELETE, req, Void.class);
+        log.debug("Synced user deletion to store service: {}", userId);
+    }
+
+    @Recover
+    public void recoverDelete(RestClientException ex, UUID userId) {
+        log.error("Failed to sync delete for user {} after retries", userId, ex);
+    }
+}

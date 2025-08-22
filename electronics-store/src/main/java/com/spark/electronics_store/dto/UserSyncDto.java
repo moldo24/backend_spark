@@ -2,11 +2,13 @@ package com.spark.electronics_store.dto;
 
 import java.util.UUID;
 
+// example shape, adjust if needed
 public record UserSyncDto(
         UUID id,
-        String email,
         String name,
-        String role,
-        int tokenVersion,
-        boolean deleted
-) { }
+        String email,
+        String role,         // "USER", "ADMIN", "BRAND_SELLER", ...
+        Integer tokenVersion,
+        Boolean deleted,
+        UUID brandId         // optional – attach/replace if present
+) {}

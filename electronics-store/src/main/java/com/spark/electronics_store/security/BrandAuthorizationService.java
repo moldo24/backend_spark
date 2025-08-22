@@ -16,6 +16,10 @@ public class BrandAuthorizationService {
 
     private final UserSyncRepository userSyncRepository;
 
+    /**
+     * Resolve the current synced user by Authentication principal name (email).
+     * Throws AccessDenied if unauthenticated or not found.
+     */
     public UserSync requireUserSync(Authentication authentication) {
         if (authentication == null || authentication.getName() == null) {
             throw new AccessDeniedException("Unauthenticated");
@@ -25,6 +29,21 @@ public class BrandAuthorizationService {
                 .orElseThrow(() -> new AccessDeniedException("Synced user not found"));
     }
 
+    /**
+     * Quick boolean check used by controllers that need a non-throwing admin test.
+     */
+    public boolean isAdmin(Authentication authentication) {
+        try {
+            UserSync u = requireUserSync(authentication);
+            return !u.isDeleted() && u.getRole() == Role.ADMIN;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    /**
+     * Enforce that current user is ADMIN.
+     */
     public void requireAdmin(Authentication authentication) {
         UserSync user = requireUserSync(authentication);
         if (user.isDeleted() || user.getRole() != Role.ADMIN) {
@@ -32,6 +51,9 @@ public class BrandAuthorizationService {
         }
     }
 
+    /**
+     * Enforce that current user is a BRAND_SELLER assigned to a specific brand.
+     */
     public void requireBrandSellerForBrand(UUID brandId, Authentication authentication) {
         UserSync user = requireUserSync(authentication);
         if (user.isDeleted()) {
@@ -45,13 +67,21 @@ public class BrandAuthorizationService {
         }
     }
 
-    // (Optional) if you ever need a relaxed access that allows admin OR assigned seller:
+    /**
+     * Optional relaxed check: allow ADMIN or assigned BRAND_SELLER.
+     */
     public void authorizeBrandAccess(UUID brandId, Authentication authentication) {
         UserSync user = requireUserSync(authentication);
         if (user.isDeleted()) throw new AccessDeniedException("User deleted");
+
         if (user.getRole() == Role.ADMIN) return;
-        if (user.getRole() == Role.BRAND_SELLER && user.getBrand() != null
-                && user.getBrand().getId().equals(brandId)) return;
+
+        if (user.getRole() == Role.BRAND_SELLER
+                && user.getBrand() != null
+                && brandId != null
+                && brandId.equals(user.getBrand().getId())) {
+            return;
+        }
         throw new AccessDeniedException("Not authorized for brand");
     }
 }

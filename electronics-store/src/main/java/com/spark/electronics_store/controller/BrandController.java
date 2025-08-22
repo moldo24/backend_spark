@@ -3,22 +3,22 @@ package com.spark.electronics_store.controller;
 import com.spark.electronics_store.dto.BrandRequestCreateDto;
 import com.spark.electronics_store.dto.BrandRequestResponse;
 import com.spark.electronics_store.dto.RejectBrandRequestDto;
-import com.spark.electronics_store.model.Brand;
-import com.spark.electronics_store.model.BrandRequest;
-import com.spark.electronics_store.model.BrandRequestStatus;
-import com.spark.electronics_store.model.Role;
-import com.spark.electronics_store.model.UserSync;
+import com.spark.electronics_store.model.*;
 import com.spark.electronics_store.repository.BrandRepository;
 import com.spark.electronics_store.repository.UserSyncRepository;
+import com.spark.electronics_store.security.BrandAuthorizationService;
 import com.spark.electronics_store.service.BrandRequestService;
 import com.spark.electronics_store.service.BrandService;
-import com.spark.electronics_store.security.BrandAuthorizationService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 import jakarta.validation.Valid;
@@ -46,7 +46,8 @@ public class BrandController {
     private final UserSyncRepository userSyncRepository;
     private final BrandRequestService brandRequestService;
 
-    // direct creation (admin only)
+    // ========== Brands ==========
+
     @PostMapping
     public ResponseEntity<Brand> createBrand(@RequestBody @Valid BrandRequestCreateDto req,
                                              Authentication authentication) {
@@ -55,7 +56,6 @@ public class BrandController {
         return ResponseEntity.status(201).body(brand);
     }
 
-    // assign seller (admin)
     @PostMapping("/{brandId}/assign-seller/{userId}")
     public ResponseEntity<Void> assignSeller(@PathVariable UUID brandId,
                                              @PathVariable UUID userId,
@@ -76,7 +76,6 @@ public class BrandController {
         return ResponseEntity.ok().build();
     }
 
-    // list brands (any authenticated)
     @GetMapping
     public ResponseEntity<List<Brand>> listBrands(@RequestParam(value = "q", required = false) String q,
                                                   Authentication authentication) {
@@ -89,9 +88,8 @@ public class BrandController {
         return ResponseEntity.ok(brands);
     }
 
-    // ---------- Brand request endpoints ----------
+    // ========== Brand Requests ==========
 
-    // submit a brand request (could be open to any authenticated user)
     @PostMapping("/requests")
     public ResponseEntity<BrandRequestResponse> submitRequest(
             @RequestBody @Valid BrandRequestCreateDto dto,
@@ -102,24 +100,14 @@ public class BrandController {
         }
 
         Jwt jwt = jwtAuth.getToken();
-
         String idString = jwt.getClaimAsString("id");
-        if (idString == null) {
-            throw new ResponseStatusException(BAD_REQUEST, "Missing 'id' claim in token");
-        }
-
-        UUID applicantId;
-        try {
-            applicantId = UUID.fromString(idString);
-        } catch (IllegalArgumentException e) {
-            throw new ResponseStatusException(BAD_REQUEST, "Invalid UUID in 'id' claim");
-        }
+        if (idString == null) throw new ResponseStatusException(BAD_REQUEST, "Missing 'id' claim");
+        UUID applicantId = UUID.fromString(idString);
 
         BrandRequest created = brandRequestService.submitRequest(dto, applicantId);
         return ResponseEntity.status(201).body(BrandRequestResponse.from(created));
     }
 
-    // admin: list requests (filter by status)
     @GetMapping("/requests")
     public ResponseEntity<List<BrandRequestResponse>> listRequests(
             @RequestParam(value = "status", required = false) String status,
@@ -140,26 +128,100 @@ public class BrandController {
         return ResponseEntity.ok(resp);
     }
 
-    // admin: approve
     @PutMapping("/requests/{id}/approve")
     public ResponseEntity<BrandRequestResponse> approveRequest(
             @PathVariable UUID id,
             Authentication authentication) {
         authService.requireAdmin(authentication);
-        String adminId = authentication != null ? authentication.getName() : "unknown";
+        String adminId = (authentication != null ? authentication.getName() : "unknown");
         BrandRequest approved = brandRequestService.approve(id, adminId);
         return ResponseEntity.ok(BrandRequestResponse.from(approved));
     }
 
-    // admin: reject
     @PutMapping("/requests/{id}/reject")
     public ResponseEntity<BrandRequestResponse> rejectRequest(
             @PathVariable UUID id,
             @RequestBody RejectBrandRequestDto dto,
             Authentication authentication) {
         authService.requireAdmin(authentication);
-        String adminId = authentication != null ? authentication.getName() : "unknown";
+        String adminId = (authentication != null ? authentication.getName() : "unknown");
         BrandRequest rejected = brandRequestService.reject(id, dto.getReason(), adminId);
         return ResponseEntity.ok(BrandRequestResponse.from(rejected));
     }
+
+    @GetMapping("/requests/mine")
+    public ResponseEntity<BrandRequestResponse> getMyRequest(Authentication authentication) {
+        if (!(authentication instanceof JwtAuthenticationToken jwtAuth)) {
+            throw new ResponseStatusException(UNAUTHORIZED, "Invalid authentication type");
+        }
+        Jwt jwt = jwtAuth.getToken();
+        String idString = jwt.getClaimAsString("id");
+        if (idString == null) throw new ResponseStatusException(BAD_REQUEST, "Missing 'id' claim");
+        UUID applicantId = UUID.fromString(idString);
+
+        return brandRequestService.findMine(applicantId)
+                .map(BrandRequestResponse::from)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(NOT_FOUND).build());
+    }
+
+    // ========== Logo upload/serve (fixes your 404) ==========
+
+    @PostMapping(value = "/requests/{id}/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<Void> uploadRequestLogo(
+            @PathVariable UUID id,
+            @RequestPart("file") MultipartFile file,
+            Authentication authentication) {
+
+        UUID actorId = null;
+        boolean isAdmin = false;
+
+        if (authentication instanceof JwtAuthenticationToken jwtAuth) {
+            Jwt jwt = jwtAuth.getToken();
+            String idString = jwt.getClaimAsString("id");
+            if (idString != null) {
+                try { actorId = UUID.fromString(idString); } catch (IllegalArgumentException ignored) {}
+            }
+            // if your BrandAuthorizationService doesn't have isAdmin, you can just rely on service-level checks
+            try { isAdmin = authService.isAdmin(authentication); } catch (Throwable ignored) { isAdmin = false; }
+        }
+
+        if (actorId == null && !isAdmin) {
+            throw new ResponseStatusException(UNAUTHORIZED, "Unauthenticated");
+        }
+
+        brandRequestService.attachLogo(id, file, actorId, isAdmin);
+        return ResponseEntity.ok().build();
+    }
+
+    @GetMapping("/requests/{id}/logo")
+    public ResponseEntity<byte[]> getRequestLogo(@PathVariable UUID id) {
+        var stored = brandRequestService.getLogo(id);
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.parseMediaType(stored.contentType));
+        headers.setCacheControl(CacheControl.noCache());
+        return new ResponseEntity<>(stored.bytes, headers, OK);
+    }
+    @DeleteMapping("/{brandId}/assign-seller/{userId}")
+    public ResponseEntity<Void> clearSellerBrand(@PathVariable UUID brandId,
+                                                 @PathVariable UUID userId,
+                                                 Authentication auth) {
+        authService.requireAdmin(auth);
+        var user = userSyncRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "UserSync not found"));
+        if (user.getBrand() == null || !user.getBrand().getId().equals(brandId)) {
+            throw new ResponseStatusException(BAD_REQUEST, "Brand mismatch or no brand assigned");
+        }
+        user.setBrand(null);
+        userSyncRepository.save(user);
+        return ResponseEntity.noContent().build();
+    }
+    // in BrandController
+    @GetMapping("/slug/{slug}")
+    public ResponseEntity<Brand> getBySlug(@PathVariable String slug) {
+        return brandRepository.findBySlug(slug)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
 }

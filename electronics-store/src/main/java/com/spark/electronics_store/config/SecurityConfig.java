@@ -8,7 +8,6 @@ import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
@@ -31,7 +30,6 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .anyRequest().hasRole("INTERNAL") // the filter gives ROLE_INTERNAL
                 );
-        // Do NOT configure oauth2ResourceServer here—this chain is purely for the static token.
         return http.build();
     }
 
@@ -42,6 +40,14 @@ public class SecurityConfig {
         http
                 .csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(auth -> auth
+                        // Allow logo fetch without authentication
+                        .requestMatchers("/public/**").permitAll()
+                        .requestMatchers("/products/search").permitAll()
+                        .requestMatchers("/products/**").permitAll()
+                        .requestMatchers("/brands/requests/*/logo").permitAll()
+                        .requestMatchers("/brands/*/products/*/photos/*").permitAll()
+                        .requestMatchers("/orders").authenticated()
+                        .requestMatchers("/orders/**").authenticated()
                         .anyRequest().authenticated()
                 )
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(withDefaults()));

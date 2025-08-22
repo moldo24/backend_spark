@@ -6,18 +6,16 @@ import com.spark.demo.model.User;
 import com.spark.demo.repository.UserRepository;
 import com.spark.demo.security.jwt.JwtTokenProvider;
 import com.spark.demo.service.UserImageService;
+import com.spark.demo.service.UserSyncNotifier; // ⬅️ added
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.stereotype.Component;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.io.IOException;
 import java.net.URLEncoder;
@@ -32,6 +30,7 @@ public class OAuth2AuthenticationSuccessHandler implements org.springframework.s
     private final JwtTokenProvider tokenProvider;
     private final UserRepository userRepository;
     private final UserImageService imageService;
+    private final UserSyncNotifier userSyncNotifier; // ⬅️ added
 
     @Value("${app.oauth2.authorized-redirect-uri:http://localhost:3000/oauth2/redirect}")
     private String redirectUri;
@@ -102,7 +101,16 @@ public class OAuth2AuthenticationSuccessHandler implements org.springframework.s
             }
             System.out.println("Updating existing OAuth2 user: " + user.getEmail());
         }
+
         userRepository.save(user);
+
+        // ⬇️ NEW: ensure the user is synced to the store service after every successful OAuth2 login
+        try {
+            userSyncNotifier.notifyUpsert(user);
+        } catch (Exception e) {
+            System.err.println("WARN: notifyUpsert failed in OAuth2 success handler for "
+                    + user.getId() + ": " + e.getMessage());
+        }
 
         String token = tokenProvider.generateToken(user);
         System.out.println("Generated JWT token for user: " + (user.getEmail() != null ? user.getEmail() : "[unknown]"));

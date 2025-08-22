@@ -13,4 +13,5 @@ public interface UserSyncRepository extends JpaRepository<UserSync, UUID> {
     Optional<UserSync> findByEmailIgnoreCase(String email);
     @Query("select u from UserSync u left join fetch u.brand where u.id = :id")
     Optional<UserSync> findWithBrandById(@Param("id") UUID id);
+
 }

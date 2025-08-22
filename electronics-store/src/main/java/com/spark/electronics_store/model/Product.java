@@ -2,23 +2,31 @@ package com.spark.electronics_store.model;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.UuidGenerator;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
+@Table(name = "product")
 @Getter
 @Setter
+@Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Builder
 public class Product {
+
     @Id
-    @UuidGenerator
-    @Column(columnDefinition = "uuid", updatable = false, nullable = false)
+    @Column(nullable = false, updatable = false)
     private UUID id;
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "brand_id", nullable = false)
+    private Brand brand;
 
     @Column(nullable = false)
     private String name;
@@ -26,30 +34,32 @@ public class Product {
     @Column(nullable = false, unique = true)
     private String slug;
 
-    @Lob
+    @Column(columnDefinition = "text")
     private String description;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    private Brand brand;
+    private BigDecimal price;
 
-    private BigDecimal price; // simplify for now
-    private String currency; // e.g., "USD"
+    private String currency;
 
     @Enumerated(EnumType.STRING)
-    private ProductStatus status = ProductStatus.ACTIVE;
+    private ProductCategory category;
 
-    private boolean deleted = false;
+    @Enumerated(EnumType.STRING)
+    private ProductStatus status;
 
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
+    @Column(nullable = false)
+    private boolean deleted;
 
-    @PrePersist
-    protected void onCreate() {
-        createdAt = updatedAt = LocalDateTime.now();
-    }
+    @CreationTimestamp
+    @Column(nullable = false, updatable = false)
+    private Instant createdAt;
 
-    @PreUpdate
-    protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
-    }
+    @UpdateTimestamp
+    @Column(nullable = false)
+    private Instant updatedAt;
+
+    @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("position ASC")
+    @Builder.Default
+    private List<ProductPhoto> photos = new ArrayList<>();
 }

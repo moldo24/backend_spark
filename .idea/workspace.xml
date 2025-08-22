@@ -5,37 +5,37 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="46247d3a-85ce-4beb-b0c4-89ce5bb3ebb7" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.gitattributes" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.mvn/wrapper/maven-wrapper.properties" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/mvnw" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/mvnw.cmd" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/DemoApplication.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/config/SecurityConfig.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/config/WebConfig.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/controller/AdminController.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/controller/AuthController.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/dto/AdminUserResponse.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/dto/AuthResponse.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/dto/ChangePasswordRequest.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/dto/CreateUserRequest.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/dto/LoginRequest.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/dto/RegisterRequest.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/dto/UpdateUserRequest.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/model/AuthProvider.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/model/Role.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/model/User.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/repository/UserRepository.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/security/CustomOAuth2UserService.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/security/CustomUserDetailsService.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/security/OAuth2AuthenticationSuccessHandler.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/security/jwt/JwtAuthenticationFilter.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/security/jwt/JwtTokenProvider.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/service/AdminUserService.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/spark/demo/service/UserImageService.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/application.properties" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/com/spark/demo/DemoApplicationTests.java" beforeDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/controller/PublicProductController.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/ProductPhotoResponse.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/ProductResponse.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/ReorderPhotosRequest.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/model/ProductCategory.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/model/ProductPhoto.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/repository/ProductPhotoRepository.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/repository/spec/ProductSpecifications.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/service/InMemoryLogoStore.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/service/ProductPhotoService.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/service/ProductService.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/service/UserManagementSyncClient.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/user_management/src/main/java/com/spark/demo/controller/InternalSyncController.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/user_management/src/main/java/com/spark/demo/dto/InternalUserSyncUpdate.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/config/SecurityConfig.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/config/SecurityConfig.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/controller/BrandController.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/controller/BrandController.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/controller/ProductController.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/controller/ProductController.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/controller/UserSyncController.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/controller/UserSyncController.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/CreateProductRequest.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/CreateProductRequest.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/UpdateProductRequest.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/UpdateProductRequest.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/UserSyncDto.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/dto/UserSyncDto.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/model/Product.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/model/Product.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/repository/BrandRequestRepository.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/repository/BrandRequestRepository.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/repository/ProductRepository.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/repository/ProductRepository.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/security/BrandAuthorizationService.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/security/BrandAuthorizationService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/service/BrandRequestService.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/service/BrandRequestService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/service/UserSyncService.java" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/java/com/spark/electronics_store/service/UserSyncService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/electronics-store/src/main/resources/application.properties" beforeDir="false" afterPath="$PROJECT_DIR$/electronics-store/src/main/resources/application.properties" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/user_management/src/main/java/com/spark/demo/config/SecurityConfig.java" beforeDir="false" afterPath="$PROJECT_DIR$/user_management/src/main/java/com/spark/demo/config/SecurityConfig.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/user_management/src/main/java/com/spark/demo/security/OAuth2AuthenticationSuccessHandler.java" beforeDir="false" afterPath="$PROJECT_DIR$/user_management/src/main/java/com/spark/demo/security/OAuth2AuthenticationSuccessHandler.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -95,6 +95,29 @@
   }
 }</component>
   <component name="RunManager">
+    <configuration name="seed_photos" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <module name="" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/seed_photos.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
     <configuration name="DemoApplication" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot" nameIsGenerated="true">
       <option name="FRAME_DEACTIVATION_UPDATE_POLICY" value="UpdateClassesAndResources" />
       <module name="demo" />
@@ -107,8 +130,8 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-jdk-9823dce3aa75-fbdcb00ec9e3-intellij.indexing.shared.core-IU-251.25410.129" />
-        <option value="bundled-js-predefined-d6986cc7102b-6a121458b545-JavaScript-IU-251.25410.129" />
+        <option value="bundled-js-predefined-d6986cc7102b-6a121458b545-JavaScript-PY-251.25410.159" />
+        <option value="bundled-python-sdk-e0ed3721d81e-36ea0e71a18c-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-251.25410.159" />
       </set>
     </attachedChunks>
   </component>
@@ -125,6 +148,7 @@
       <workItem from="1753892294763" duration="3604000" />
       <workItem from="1753956839184" duration="18123000" />
       <workItem from="1754035377497" duration="12722000" />
+      <workItem from="1755701349850" duration="682000" />
     </task>
     <servers />
   </component>
